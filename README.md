@@ -68,3 +68,27 @@ With Go and `rage` installed, run the encryption/decryption round-trip test:
 ```
 
 Set `RAGE` to use a `rage` executable at a nonstandard path.
+
+## Attach an age file to a Nostr note
+
+An encrypted `.age` file contains high-entropy bytes, so encoding it as ASCII
+adds size without creating useful compression. Emoji encoding would take more
+space. `nostr-age-note` stores the binary `.age` bytes in a private ancillary
+PNG chunk instead:
+
+```sh
+go install ./cmd/nostr-age-note
+nostr-age-note embed cover.png secret.txt.age cover-with-age.png
+```
+
+Upload `cover-with-age.png` with a Nostr media uploader and put its URL in the
+note. After downloading the original PNG, recover the encrypted file with:
+
+```sh
+nostr-age-note extract cover-with-age.png recovered.age
+```
+
+This adds approximately the `.age` file size to the PNG, without Base64's
+expansion. The PNG chunk is application-specific, so image services or editors
+may discard it when transforming the image. Share the original PNG as a file
+and extract the payload before opening or re-encoding it in an image editor.

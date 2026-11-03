@@ -45,3 +45,13 @@ age -d -i AGE-PLUGIN-NOSTR-1... secret.txt.age
 The public key is an x-only 32-byte secp256k1 key. Identity and recipient
 encodings use age's plugin Bech32 formats, while the conversion commands
 handle NIP-19's `npub` and `nsec` formats.
+
+## Integration test with rage
+
+With Go and `rage` installed, run the encryption/decryption round-trip test:
+
+```sh
+./scripts/test-rage.sh
+```
+
+Set `RAGE` to use a `rage` executable at a nonstandard path.

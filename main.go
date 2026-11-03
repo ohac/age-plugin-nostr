@@ -218,7 +218,32 @@ func convert(args []string) error {
 	return nil
 }
 
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, `Usage:
+  age-plugin-nostr -h | --help
+  age-plugin-nostr keygen
+  age-plugin-nostr recipient <npub>
+  age-plugin-nostr identity <nsec-or-hex>
+  age-plugin-nostr identity-file <path>
+
+Commands:
+  keygen                 Generate a Nostr key and age recipient/identity
+  recipient <npub>       Convert a NIP-19 public key to an age recipient
+  identity <key>         Convert an nsec or 32-byte hex secret to an age identity
+  identity-file <path>   Read an nsec or hex secret file and print an age identity
+
+The identity and identity-file commands print secret age identity material.
+Keep that output private. For age decryption, write the output to a file and
+pass the file path with -i/--identity.`)
+}
+
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "-h" || arg == "--help" {
+			printUsage(os.Stdout)
+			return
+		}
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "keygen" || os.Args[1] == "recipient" || os.Args[1] == "identity" || os.Args[1] == "identity-file") {
 		var err error
 		switch os.Args[1] {

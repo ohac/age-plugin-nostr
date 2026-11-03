@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -135,6 +136,16 @@ func TestDecodeSecretKeyFormats(t *testing.T) {
 	for _, input := range []string{"", "0x1234", hex.EncodeToString(make([]byte, 32))} {
 		if _, err := decodeSecretKey(input); err == nil {
 			t.Fatal("decodeSecretKey unexpectedly accepted an invalid key")
+		}
+	}
+}
+
+func TestPrintUsage(t *testing.T) {
+	var output bytes.Buffer
+	printUsage(&output)
+	for _, want := range []string{"Usage:", "-h | --help", "keygen", "recipient <npub>", "identity <nsec-or-hex>", "identity-file <path>"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("usage output does not contain %q", want)
 		}
 	}
 }

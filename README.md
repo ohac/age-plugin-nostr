@@ -78,14 +78,23 @@ PNG chunk instead:
 
 ```sh
 go install ./cmd/nostr-age-note
-nostr-age-note embed cover.png secret.txt.age cover-with-age.png
+nostr-age-note embed secret.txt.age
 ```
 
-Upload `cover-with-age.png` with a Nostr media uploader and put its URL in the
-note. After downloading the original PNG, recover the encrypted file with:
+Without a cover image, the command generates a dark Nostr-themed PNG with a
+document and lock illustration. It prints the timestamped filename. To use an
+existing PNG and choose the output path:
 
 ```sh
-nostr-age-note extract cover-with-age.png recovered.age
+nostr-age-note embed secret.txt.age --cover cover.png -o cover-with-age.png
+```
+
+Upload the resulting PNG with a Nostr media uploader and put its URL in the
+note. After downloading the original PNG, recover the encrypted file. Omitting
+`-o` also generates a timestamped filename:
+
+```sh
+nostr-age-note extract cover-with-age.png
 ```
 
 This adds approximately the `.age` file size to the PNG, without Base64's

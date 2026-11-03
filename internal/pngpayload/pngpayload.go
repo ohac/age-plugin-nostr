@@ -11,6 +11,10 @@ var signature = []byte{137, 80, 78, 71, 13, 10, 26, 10}
 
 var payloadChunk = [4]byte{'n', 'a', 'G', 'e'}
 
+func IsPNG(data []byte) bool {
+	return len(data) >= len(signature) && string(data[:len(signature)]) == string(signature)
+}
+
 type chunk struct {
 	start int
 	end   int

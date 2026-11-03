@@ -71,22 +71,32 @@ Set `RAGE` to use a `rage` executable at a nonstandard path.
 
 ## Attach an age file to a Nostr note
 
-An encrypted `.age` file contains high-entropy bytes, so encoding it as ASCII
-adds size without creating useful compression. Emoji encoding would take more
-space. `nostr-age-note` stores the binary `.age` bytes in a private ancillary
-PNG chunk instead:
+`nostr-age-note` supports two ways to carry an encrypted `.age` file in a Nostr
+note. By default it stores the binary bytes in a private PNG chunk, with a
+small, highly compressible generated cover:
 
 ```sh
 go install ./cmd/nostr-age-note
 nostr-age-note embed secret.txt.age
 ```
 
-Without a cover image, the command generates a dark Nostr-themed PNG with a
-document and lock illustration. It prints the timestamped filename. To use an
-existing PNG and choose the output path:
+It prints the timestamped filename. To use an existing PNG and choose the
+output path:
 
 ```sh
 nostr-age-note embed secret.txt.age --cover cover.png -o cover-with-age.png
+```
+
+An alternative `vs` format follows the byte-to-variation-selector mapping
+described in [Paul Butler's article](https://paulbutler.org/2025/smuggling-arbitrary-data-through-an-emoji/):
+each byte becomes one selector after a package emoji. It can be copied as text
+and extracted directly, without an image host, but expands the payload to about
+four UTF-8 bytes per input byte and invisible characters may be stripped by
+software. Use it when text-carried data is useful:
+
+```sh
+nostr-age-note embed secret.txt.age --format vs
+nostr-age-note extract nostr-age-YYYYMMDD-HHMMSS.txt
 ```
 
 Upload the resulting PNG with a Nostr media uploader and put its URL in the
@@ -97,7 +107,7 @@ note. After downloading the original PNG, recover the encrypted file. Omitting
 nostr-age-note extract cover-with-age.png
 ```
 
-This adds approximately the `.age` file size to the PNG, without Base64's
-expansion. The PNG chunk is application-specific, so image services or editors
+The PNG carrier adds approximately the `.age` file size plus a small cover,
+without Base64's expansion. The PNG chunk is application-specific, so image services or editors
 may discard it when transforming the image. Share the original PNG as a file
 and extract the payload before opening or re-encoding it in an image editor.

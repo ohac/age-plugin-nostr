@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"compress/flate"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"strings"
@@ -15,15 +18,14 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stdout, `Usage:
   nostr-age-note -h | --help
-  nostr-age-note embed <file.age> [--cover image.png] [-o output.png]
-  nostr-age-note extract <image.png> [-o output.age]
+  nostr-age-note embed <file.age> [--format png|vs] [--cover image.png] [-o output]
+  nostr-age-note extract <carrier> [-o output.age]
 
-embed stores the binary age file in a private PNG chunk. Without --cover, it
-generates a dark Nostr-themed cover showing an encrypted file and lock. When
--o is omitted, a timestamped filename is created in the current directory.
-Upload the resulting PNG and reference its URL from a Nostr note.
+embed stores the binary age file in a PNG chunk (default) or invisible Unicode
+variation selectors (vs). The default PNG cover is a small, simple image.
+When -o is omitted, a timestamped filename is created in the current directory.
 
-extract restores the .age file from the original PNG. The extracted file also
+extract restores the .age file from either carrier. The extracted file also
 gets a timestamped filename when -o is omitted.`)
 }
 
@@ -42,9 +44,19 @@ func run(args []string) error {
 			return err
 		}
 		if len(inputs) != 1 {
-			return errors.New("usage: nostr-age-note embed <file.age> [--cover image.png] [-o output.png]")
+			return errors.New("usage: nostr-age-note embed <file.age> [--format png|vs] [--cover image.png] [-o output]")
 		}
-		return embedFile(inputs[0], options["--cover"], outputPath(options, "png"))
+		format := options["--format"]
+		if format == "" {
+			format = "png"
+		}
+		if format != "png" && format != "vs" {
+			return fmt.Errorf("unsupported format %q (want png or vs)", format)
+		}
+		if format == "vs" && options["--cover"] != "" {
+			return errors.New("--cover can only be used with --format png")
+		}
+		return embedFile(inputs[0], format, options["--cover"], outputPath(options, formatExtension(format)))
 	case "extract":
 		inputs, options, help, err := parseOptions(args[1:], false)
 		if err != nil || help {
@@ -69,7 +81,7 @@ func parseOptions(args []string, allowCover bool) ([]string, map[string]string, 
 			return nil, nil, true, nil
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
-		if name == "-o" || name == "--output" || (allowCover && name == "--cover") {
+		if name == "-o" || name == "--output" || (allowCover && (name == "--cover" || name == "--format")) {
 			if !hasValue {
 				index++
 				if index == len(args) {
@@ -109,7 +121,14 @@ func outputPath(options map[string]string, extension string) string {
 	return path
 }
 
-func embedFile(agePath, coverPath, output string) error {
+func formatExtension(format string) string {
+	if format == "vs" {
+		return "txt"
+	}
+	return "png"
+}
+
+func embedFile(agePath, format, coverPath, output string) error {
 	if output == "" {
 		return errors.New("could not choose an unused timestamped output filename")
 	}
@@ -117,24 +136,29 @@ func embedFile(agePath, coverPath, output string) error {
 	if err != nil {
 		return fmt.Errorf("read age file: %w", err)
 	}
-	var imageData []byte
-	if coverPath != "" {
-		imageData, err = os.ReadFile(coverPath)
-		if err != nil {
-			return fmt.Errorf("read cover PNG: %w", err)
-		}
+	var result []byte
+	if format == "vs" {
+		result = encodeVariationSelectors(payload)
 	} else {
-		imageData, err = generatedCover()
-		if err != nil {
-			return fmt.Errorf("generate cover PNG: %w", err)
+		var imageData []byte
+		if coverPath != "" {
+			imageData, err = os.ReadFile(coverPath)
+			if err != nil {
+				return fmt.Errorf("read cover PNG: %w", err)
+			}
+		} else {
+			imageData, err = generatedCover()
+			if err != nil {
+				return fmt.Errorf("generate cover PNG: %w", err)
+			}
 		}
-	}
-	result, err := pngpayload.Embed(imageData, payload)
-	if err != nil {
-		return err
+		result, err = pngpayload.Embed(imageData, payload)
+		if err != nil {
+			return err
+		}
 	}
 	if err := os.WriteFile(output, result, 0600); err != nil {
-		return fmt.Errorf("write PNG: %w", err)
+		return fmt.Errorf("write carrier: %w", err)
 	}
 	fmt.Println(output)
 	return nil
@@ -146,9 +170,14 @@ func extractFile(imagePath, output string) error {
 	}
 	imageData, err := os.ReadFile(imagePath)
 	if err != nil {
-		return fmt.Errorf("read PNG: %w", err)
+		return fmt.Errorf("read carrier: %w", err)
 	}
-	payload, err := pngpayload.Extract(imageData)
+	var payload []byte
+	if pngpayload.IsPNG(imageData) {
+		payload, err = pngpayload.Extract(imageData)
+	} else {
+		payload, err = decodeVariationSelectors(string(imageData))
+	}
 	if err != nil {
 		return err
 	}
@@ -178,11 +207,89 @@ func defaultOutputName(extension string) (string, error) {
 }
 
 func generatedCover() ([]byte, error) {
+	palette := color.Palette{
+		color.RGBA{R: 12, G: 19, B: 43, A: 255},
+		color.RGBA{R: 71, G: 220, B: 205, A: 255},
+		color.RGBA{R: 245, G: 247, B: 255, A: 255},
+	}
+	cover := image.NewPaletted(image.Rect(0, 0, 96, 96), palette)
+	for y := 0; y < 96; y++ {
+		for x := 0; x < 96; x++ {
+			cover.SetColorIndex(x, y, 0)
+		}
+	}
+	for y := 18; y < 79; y++ {
+		for x := 29; x < 68; x++ {
+			cover.SetColorIndex(x, y, 2)
+		}
+	}
+	for y := 40; y < 72; y++ {
+		for x := 36; x < 61; x++ {
+			cover.SetColorIndex(x, y, 0)
+		}
+	}
+	for y := 27; y < 43; y++ {
+		for x := 39; x < 58; x++ {
+			dx, dy := x-48, y-35
+			if dx*dx+dy*dy <= 9*9 && dx*dx+dy*dy >= 6*6 {
+				cover.SetColorIndex(x, y, 1)
+			}
+		}
+	}
+	for y := 40; y < 71; y++ {
+		for x := 36; x < 61; x++ {
+			cover.SetColorIndex(x, y, 1)
+		}
+	}
+	for y := 47; y < 65; y++ {
+		cover.SetColorIndex(48, y, 0)
+	}
 	var buffer bytes.Buffer
-	if err := png.Encode(&buffer, makeCoverImage()); err != nil {
+	encoder := png.Encoder{CompressionLevel: flate.BestCompression}
+	if err := encoder.Encode(&buffer, cover); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func encodeVariationSelectors(payload []byte) []byte {
+	var builder strings.Builder
+	builder.Grow(4 + len(payload)*4)
+	builder.WriteString("📦")
+	for _, value := range payload {
+		codepoint := rune(0xE0100 + int(value) - 16)
+		if value < 16 {
+			codepoint = rune(0xFE00 + int(value))
+		}
+		builder.WriteRune(codepoint)
+	}
+	return []byte(builder.String())
+}
+
+func decodeVariationSelectors(text string) ([]byte, error) {
+	var payload []byte
+	started := false
+	for _, character := range text {
+		codepoint := int(character)
+		var value byte
+		switch {
+		case codepoint >= 0xFE00 && codepoint <= 0xFE0F:
+			value = byte(codepoint - 0xFE00)
+		case codepoint >= 0xE0100 && codepoint <= 0xE01EF:
+			value = byte(codepoint - 0xE0100 + 16)
+		default:
+			if started {
+				return payload, nil
+			}
+			continue
+		}
+		started = true
+		payload = append(payload, value)
+	}
+	if len(payload) == 0 {
+		return nil, errors.New("input contains no Unicode variation-selector payload")
+	}
+	return payload, nil
 }
 
 func main() {

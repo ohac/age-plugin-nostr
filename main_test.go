@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"filippo.io/age"
@@ -106,6 +107,35 @@ func TestNIP19KeyConversion(t *testing.T) {
 	}
 	if got := plugin.EncodeRecipient(pluginName, gotPublic); got == "" {
 		t.Fatal("failed to encode age recipient")
+	}
+}
+
+func TestDecodeSecretKeyFormats(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := priv.Serialize()
+	nsec, err := encodeNIP19("nsec", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hexKey := hex.EncodeToString(secret)
+
+	for _, input := range []string{nsec, hexKey, "0x" + hexKey, "  " + hexKey + "\n"} {
+		got, err := decodeSecretKey(input)
+		if err != nil {
+			t.Fatalf("decodeSecretKey failed: %v", err)
+		}
+		if !bytes.Equal(got, secret) {
+			t.Fatalf("decoded key %x, want %x", got, secret)
+		}
+	}
+
+	for _, input := range []string{"", "0x1234", hex.EncodeToString(make([]byte, 32))} {
+		if _, err := decodeSecretKey(input); err == nil {
+			t.Fatal("decodeSecretKey unexpectedly accepted an invalid key")
+		}
 	}
 }
 

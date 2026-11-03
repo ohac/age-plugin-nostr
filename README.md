@@ -33,19 +33,27 @@ Convert existing NIP-19 keys:
 ```sh
 age-plugin-nostr recipient npub1...
 age-plugin-nostr identity nsec1...
+age-plugin-nostr identity 0123456789abcdef... # 64 hexadecimal characters
+age-plugin-nostr identity-file ~/.nostr/nsec > nostr-identity.txt
 ```
+
+`identity` accepts either an `nsec1...` value or a 32-byte secret key in
+64-character hexadecimal form, optionally prefixed by `0x`. `identity-file`
+reads either representation from a file and prints the age identity encoding.
+This converts the secret key file; it does not modify the input file.
 
 ## Encrypt and decrypt
 
 ```sh
 age -r age1nostr1... -o secret.txt.age secret.txt
-age-plugin-nostr identity nsec1... > nostr-identity.txt
+age-plugin-nostr identity-file ~/.nostr/nsec > nostr-identity.txt
 age -d -i nostr-identity.txt secret.txt.age
 ```
 
-The argument to `-i` is a file path, not the identity string. The identity
-file must contain only the `AGE-PLUGIN-NOSTR-1...` value, with no `age identity:`
-label or other keygen output. Keep this file secret.
+The argument to `-i` is a file path, not the identity string. `rage` and age
+clients expect the file to contain the `AGE-PLUGIN-NOSTR-1...` encoding; they
+do not automatically convert raw `nsec1...` or hex secret key files. Keep the
+resulting identity file secret.
 
 The public key is an x-only 32-byte secp256k1 key. Identity and recipient
 encodings use age's plugin Bech32 formats, while the conversion commands

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -102,10 +103,11 @@ func parseIdentity(data []byte) (age.Identity, error) {
 	if len(data) != 32 {
 		return nil, errors.New("Nostr secret key must be 32 bytes")
 	}
-	priv, pub := btcec.PrivKeyFromBytes(data)
-	if priv.Key.IsZero() {
+	var scalar btcec.ModNScalar
+	if scalar.SetByteSlice(data) || scalar.IsZero() {
 		return nil, errors.New("invalid Nostr secret key")
 	}
+	priv, pub := btcec.PrivKeyFromBytes(data)
 	if pub.SerializeCompressed()[0] == 3 {
 		priv.Key.Negate()
 	}
@@ -128,6 +130,29 @@ func decodeNIP19(value, prefix string) ([]byte, error) {
 		return nil, errors.New("key must decode to 32 bytes")
 	}
 	return decoded, nil
+}
+
+func decodeSecretKey(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	var secret []byte
+	var err error
+	if strings.HasPrefix(strings.ToLower(value), "nsec1") {
+		secret, err = decodeNIP19(strings.ToLower(value), "nsec")
+	} else {
+		value = strings.TrimPrefix(strings.TrimPrefix(value, "0x"), "0X")
+		secret, err = hex.DecodeString(value)
+		if err == nil && len(secret) != 32 {
+			err = errors.New("hex secret key must contain exactly 64 hexadecimal characters")
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var scalar btcec.ModNScalar
+	if scalar.SetByteSlice(secret) || scalar.IsZero() {
+		return nil, errors.New("invalid Nostr secret key")
+	}
+	return secret, nil
 }
 
 func encodeNIP19(prefix string, key []byte) (string, error) {
@@ -162,7 +187,7 @@ func keygen() error {
 
 func convert(args []string) error {
 	if len(args) != 2 {
-		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec>")
+		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec-or-hex> | identity-file <path>")
 	}
 	switch args[0] {
 	case "recipient":
@@ -172,24 +197,34 @@ func convert(args []string) error {
 		}
 		fmt.Println(plugin.EncodeRecipient(pluginName, key))
 	case "identity":
-		key, err := decodeNIP19(strings.ToLower(args[1]), "nsec")
+		key, err := decodeSecretKey(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Println(plugin.EncodeIdentity(pluginName, key))
+	case "identity-file":
+		contents, err := os.ReadFile(args[1])
+		if err != nil {
+			return fmt.Errorf("read secret key file: %w", err)
+		}
+		key, err := decodeSecretKey(string(contents))
 		if err != nil {
 			return err
 		}
 		fmt.Println(plugin.EncodeIdentity(pluginName, key))
 	default:
-		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec>")
+		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec-or-hex> | identity-file <path>")
 	}
 	return nil
 }
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "keygen" || os.Args[1] == "recipient" || os.Args[1] == "identity") {
+	if len(os.Args) > 1 && (os.Args[1] == "keygen" || os.Args[1] == "recipient" || os.Args[1] == "identity" || os.Args[1] == "identity-file") {
 		var err error
 		switch os.Args[1] {
 		case "keygen":
 			err = keygen()
-		case "recipient", "identity":
+		case "recipient", "identity", "identity-file":
 			err = convert(os.Args[1:])
 		}
 		if err != nil {

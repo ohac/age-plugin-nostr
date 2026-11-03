@@ -1,0 +1,210 @@
+package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"filippo.io/age"
+	"filippo.io/age/plugin"
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcutil/bech32"
+)
+
+const pluginName = "nostr"
+const stanzaType = "nostr-v1"
+
+type nostrRecipient struct{ pub *btcec.PublicKey }
+type nostrIdentity struct{ priv *btcec.PrivateKey }
+
+func (r *nostrRecipient) Wrap(fileKey []byte) ([]*age.Stanza, error) {
+	ephemeral, err := btcec.NewPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	shared := btcec.GenerateSharedSecret(ephemeral, r.pub)
+	key := deriveKey(shared)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	sealed := aead.Seal(nil, nonce, fileKey, []byte(stanzaType))
+	body := append(nonce, sealed...)
+	return []*age.Stanza{{Type: stanzaType, Args: []string{base64.RawStdEncoding.EncodeToString(ephemeral.PubKey().SerializeCompressed())}, Body: body}}, nil
+}
+
+func (i *nostrIdentity) Unwrap(stanzas []*age.Stanza) ([]byte, error) {
+	for _, stanza := range stanzas {
+		if stanza.Type != stanzaType || len(stanza.Args) != 1 {
+			continue
+		}
+		ephBytes, err := base64.RawStdEncoding.DecodeString(stanza.Args[0])
+		if err != nil {
+			continue
+		}
+		eph, err := btcec.ParsePubKey(ephBytes)
+		if err != nil {
+			continue
+		}
+		shared := btcec.GenerateSharedSecret(i.priv, eph)
+		key := deriveKey(shared)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			continue
+		}
+		aead, err := cipher.NewGCM(block)
+		if err != nil || len(stanza.Body) < aead.NonceSize() {
+			continue
+		}
+		plain, err := aead.Open(nil, stanza.Body[:aead.NonceSize()], stanza.Body[aead.NonceSize():], []byte(stanzaType))
+		if err == nil {
+			return plain, nil
+		}
+	}
+	return nil, age.ErrIncorrectIdentity
+}
+
+func deriveKey(shared []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte("age-plugin-nostr-v1\x00"))
+	h.Write(shared)
+	return h.Sum(nil)
+}
+
+func parseRecipient(data []byte) (age.Recipient, error) {
+	if len(data) != 32 {
+		return nil, errors.New("Nostr public key must be 32 bytes")
+	}
+	pub, err := btcec.ParsePubKey(append([]byte{2}, data...))
+	if err != nil {
+		return nil, fmt.Errorf("invalid x-only public key: %w", err)
+	}
+	return &nostrRecipient{pub: pub}, nil
+}
+
+func parseIdentity(data []byte) (age.Identity, error) {
+	if len(data) != 32 {
+		return nil, errors.New("Nostr secret key must be 32 bytes")
+	}
+	priv, pub := btcec.PrivKeyFromBytes(data)
+	if priv.Key.IsZero() {
+		return nil, errors.New("invalid Nostr secret key")
+	}
+	if pub.SerializeCompressed()[0] == 3 {
+		priv.Key.Negate()
+	}
+	return &nostrIdentity{priv: priv}, nil
+}
+
+func decodeNIP19(value, prefix string) ([]byte, error) {
+	hrp, data, err := bech32.Decode(value)
+	if err != nil {
+		return nil, err
+	}
+	if hrp != prefix {
+		return nil, fmt.Errorf("expected %s key", prefix)
+	}
+	decoded, err := bech32.ConvertBits(data, 5, 8, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) != 32 {
+		return nil, errors.New("key must decode to 32 bytes")
+	}
+	return decoded, nil
+}
+
+func encodeNIP19(prefix string, key []byte) (string, error) {
+	data, err := bech32.ConvertBits(key, 8, 5, true)
+	if err != nil {
+		return "", err
+	}
+	return bech32.Encode(prefix, data)
+}
+
+func keygen() error {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		return err
+	}
+	secret := priv.Serialize()
+	pub := priv.PubKey().SerializeCompressed()[1:]
+	nsec, err := encodeNIP19("nsec", secret)
+	if err != nil {
+		return err
+	}
+	npub, err := encodeNIP19("npub", pub)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Nostr public key: %s\n", npub)
+	fmt.Printf("age recipient: %s\n", plugin.EncodeRecipient(pluginName, pub))
+	fmt.Printf("Nostr secret key: %s\n", nsec)
+	fmt.Printf("age identity: %s\n", plugin.EncodeIdentity(pluginName, secret))
+	return nil
+}
+
+func convert(args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec>")
+	}
+	switch args[0] {
+	case "recipient":
+		key, err := decodeNIP19(strings.ToLower(args[1]), "npub")
+		if err != nil {
+			return err
+		}
+		fmt.Println(plugin.EncodeRecipient(pluginName, key))
+	case "identity":
+		key, err := decodeNIP19(strings.ToLower(args[1]), "nsec")
+		if err != nil {
+			return err
+		}
+		fmt.Println(plugin.EncodeIdentity(pluginName, key))
+	default:
+		return errors.New("usage: age-plugin-nostr recipient <npub> | identity <nsec>")
+	}
+	return nil
+}
+
+func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "keygen" || os.Args[1] == "recipient" || os.Args[1] == "identity") {
+		var err error
+		switch os.Args[1] {
+		case "keygen":
+			err = keygen()
+		case "recipient", "identity":
+			err = convert(os.Args[1:])
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	p, err := plugin.New(pluginName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	p.HandleRecipient(parseRecipient)
+	p.HandleIdentity(parseIdentity)
+	os.Exit(p.Main())
+}

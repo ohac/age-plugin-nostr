@@ -39,8 +39,13 @@ age-plugin-nostr identity nsec1...
 
 ```sh
 age -r age1nostr1... -o secret.txt.age secret.txt
-age -d -i AGE-PLUGIN-NOSTR-1... secret.txt.age
+age-plugin-nostr identity nsec1... > nostr-identity.txt
+age -d -i nostr-identity.txt secret.txt.age
 ```
+
+The argument to `-i` is a file path, not the identity string. The identity
+file must contain only the `AGE-PLUGIN-NOSTR-1...` value, with no `age identity:`
+label or other keygen output. Keep this file secret.
 
 The public key is an x-only 32-byte secp256k1 key. Identity and recipient
 encodings use age's plugin Bech32 formats, while the conversion commands
